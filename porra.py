@@ -1,67 +1,78 @@
 import streamlit as st
-from supabase import create_client, Client
+import requests
 
-# ── Conexión Supabase ─────────────────────────────────────────────────────────
-# Pon tus credenciales en Streamlit > Settings > Secrets así:
-#   [supabase]
-#   url = "https://XXXXXXXX.supabase.co"
-#   key = "eyJ..."
+# ── Conexión Supabase via REST directo ────────────────────────────────────────
+SUPABASE_URL = st.secrets["supabase"]["url"]
+SUPABASE_KEY = st.secrets["supabase"]["key"]
 
-@st.cache_resource
-def get_supabase() -> Client:
-    url = st.secrets["supabase"]["url"]
-    key = st.secrets["supabase"]["key"]
-    return create_client(url, key)
-
-supabase = get_supabase()
+HEADERS = {
+    "apikey": SUPABASE_KEY,
+    "Authorization": f"Bearer {SUPABASE_KEY}",
+    "Content-Type": "application/json",
+    "Prefer": "return=representation"
+}
 
 def cargar_apuestas():
-    res = supabase.table("apuestas").select("*").order("id", desc=False).execute()
-    return res.data or []
+    r = requests.get(
+        f"{SUPABASE_URL}/rest/v1/apuestas?order=id.asc",
+        headers=HEADERS
+    )
+    return r.json() if r.ok else []
 
 def guardar_apuesta(apuesta: dict):
-    supabase.table("apuestas").insert(apuesta).execute()
+    requests.post(
+        f"{SUPABASE_URL}/rest/v1/apuestas",
+        headers=HEADERS,
+        json=apuesta
+    )
 
 def actualizar_pagado(apuesta_id: int, pagado: bool):
-    supabase.table("apuestas").update({"pagado": pagado}).eq("id", apuesta_id).execute()
+    requests.patch(
+        f"{SUPABASE_URL}/rest/v1/apuestas?id=eq.{apuesta_id}",
+        headers=HEADERS,
+        json={"pagado": pagado}
+    )
 
 def eliminar_apuesta(apuesta_id: int):
-    supabase.table("apuestas").delete().eq("id", apuesta_id).execute()
+    requests.delete(
+        f"{SUPABASE_URL}/rest/v1/apuestas?id=eq.{apuesta_id}",
+        headers=HEADERS
+    )
 
 # ── Datos reales de partidos ──────────────────────────────────────────────────
 PARTIDOS = {
     "🏆 Champions League": [
-        {"id": "c1",  "home": "Real Madrid",      "away": "Bayern Munich",    "fecha": "Mar 7 Abr · FIN",        "estado": "final",      "score": (1, 2), "home_pct": None, "draw_pct": None, "away_pct": None},
-        {"id": "c2",  "home": "Sporting CP",       "away": "Arsenal FC",       "fecha": "Mar 7 Abr · FIN",        "estado": "final",      "score": (0, 1), "home_pct": None, "draw_pct": None, "away_pct": None},
-        {"id": "c3",  "home": "FC Barcelona",      "away": "Newcastle United", "fecha": "Mié 18 Mar · FIN",       "estado": "final",      "score": (7, 2), "home_pct": None, "draw_pct": None, "away_pct": None},
-        {"id": "c4",  "home": "Tottenham",         "away": "Atlético Madrid",  "fecha": "Mié 18 Mar · FIN",       "estado": "final",      "score": (3, 2), "home_pct": None, "draw_pct": None, "away_pct": None},
-        {"id": "c5",  "home": "Bayern Munich",     "away": "Atalanta BC",      "fecha": "Mié 18 Mar · FIN",       "estado": "final",      "score": (4, 1), "home_pct": None, "draw_pct": None, "away_pct": None},
-        {"id": "c6",  "home": "Manchester City",   "away": "Real Madrid",      "fecha": "Mar 17 Mar · FIN",       "estado": "final",      "score": (1, 2), "home_pct": None, "draw_pct": None, "away_pct": None},
-        {"id": "c7",  "home": "Chelsea FC",        "away": "PSG",              "fecha": "Mar 17 Mar · FIN",       "estado": "final",      "score": (0, 3), "home_pct": None, "draw_pct": None, "away_pct": None},
-        {"id": "c8",  "home": "PSG",               "away": "Liverpool FC",     "fecha": "Mié 8 Abr · 21:00",     "estado": "programado", "score": None,  "home_pct": 54.2, "draw_pct": 23.1, "away_pct": 22.7},
-        {"id": "c9",  "home": "FC Barcelona",      "away": "Atlético Madrid",  "fecha": "Mié 8 Abr · 21:00",     "estado": "programado", "score": None,  "home_pct": 63.6, "draw_pct": 18.7, "away_pct": 17.7},
-        {"id": "c10", "home": "Liverpool FC",      "away": "PSG",              "fecha": "Mar 14 Abr · 21:00",    "estado": "programado", "score": None,  "home_pct": 24.5, "draw_pct": 23.0, "away_pct": 52.5},
-        {"id": "c11", "home": "Atlético Madrid",   "away": "FC Barcelona",     "fecha": "Mar 14 Abr · 21:00",    "estado": "programado", "score": None,  "home_pct": 19.2, "draw_pct": 19.6, "away_pct": 61.2},
-        {"id": "c12", "home": "Bayern Munich",     "away": "Real Madrid",      "fecha": "Mié 15 Abr · 21:00",   "estado": "programado", "score": None,  "home_pct": 60.8, "draw_pct": 19.2, "away_pct": 20.0},
-        {"id": "c13", "home": "Arsenal FC",        "away": "Sporting CP",      "fecha": "Mié 15 Abr · 21:00",   "estado": "programado", "score": None,  "home_pct": 68.4, "draw_pct": 19.1, "away_pct": 12.5},
+        {"id": "c1",  "home": "Real Madrid",      "away": "Bayern Munich",    "fecha": "Mar 7 Abr · FIN",      "estado": "final",      "score": (1, 2), "home_pct": None, "draw_pct": None, "away_pct": None},
+        {"id": "c2",  "home": "Sporting CP",       "away": "Arsenal FC",       "fecha": "Mar 7 Abr · FIN",      "estado": "final",      "score": (0, 1), "home_pct": None, "draw_pct": None, "away_pct": None},
+        {"id": "c3",  "home": "FC Barcelona",      "away": "Newcastle United", "fecha": "Mié 18 Mar · FIN",     "estado": "final",      "score": (7, 2), "home_pct": None, "draw_pct": None, "away_pct": None},
+        {"id": "c4",  "home": "Tottenham",         "away": "Atlético Madrid",  "fecha": "Mié 18 Mar · FIN",     "estado": "final",      "score": (3, 2), "home_pct": None, "draw_pct": None, "away_pct": None},
+        {"id": "c5",  "home": "Bayern Munich",     "away": "Atalanta BC",      "fecha": "Mié 18 Mar · FIN",     "estado": "final",      "score": (4, 1), "home_pct": None, "draw_pct": None, "away_pct": None},
+        {"id": "c6",  "home": "Manchester City",   "away": "Real Madrid",      "fecha": "Mar 17 Mar · FIN",     "estado": "final",      "score": (1, 2), "home_pct": None, "draw_pct": None, "away_pct": None},
+        {"id": "c7",  "home": "Chelsea FC",        "away": "PSG",              "fecha": "Mar 17 Mar · FIN",     "estado": "final",      "score": (0, 3), "home_pct": None, "draw_pct": None, "away_pct": None},
+        {"id": "c8",  "home": "PSG",               "away": "Liverpool FC",     "fecha": "Mié 8 Abr · 21:00",   "estado": "programado", "score": None,   "home_pct": 54.2, "draw_pct": 23.1, "away_pct": 22.7},
+        {"id": "c9",  "home": "FC Barcelona",      "away": "Atlético Madrid",  "fecha": "Mié 8 Abr · 21:00",   "estado": "programado", "score": None,   "home_pct": 63.6, "draw_pct": 18.7, "away_pct": 17.7},
+        {"id": "c10", "home": "Liverpool FC",      "away": "PSG",              "fecha": "Mar 14 Abr · 21:00",  "estado": "programado", "score": None,   "home_pct": 24.5, "draw_pct": 23.0, "away_pct": 52.5},
+        {"id": "c11", "home": "Atlético Madrid",   "away": "FC Barcelona",     "fecha": "Mar 14 Abr · 21:00",  "estado": "programado", "score": None,   "home_pct": 19.2, "draw_pct": 19.6, "away_pct": 61.2},
+        {"id": "c12", "home": "Bayern Munich",     "away": "Real Madrid",      "fecha": "Mié 15 Abr · 21:00",  "estado": "programado", "score": None,   "home_pct": 60.8, "draw_pct": 19.2, "away_pct": 20.0},
+        {"id": "c13", "home": "Arsenal FC",        "away": "Sporting CP",      "fecha": "Mié 15 Abr · 21:00",  "estado": "programado", "score": None,   "home_pct": 68.4, "draw_pct": 19.1, "away_pct": 12.5},
     ],
     "🇪🇸 LaLiga": [
-        {"id": "l1",  "home": "Atlético Madrid",   "away": "FC Barcelona",     "fecha": "Sáb 4 Abr · FIN",       "estado": "final",      "score": (1, 2), "home_pct": None, "draw_pct": None, "away_pct": None},
-        {"id": "l2",  "home": "Mallorca",           "away": "Real Madrid",      "fecha": "Sáb 4 Abr · FIN",       "estado": "final",      "score": (2, 1), "home_pct": None, "draw_pct": None, "away_pct": None},
-        {"id": "l3",  "home": "Real Betis",         "away": "Espanyol",         "fecha": "Sáb 4 Abr · FIN",       "estado": "final",      "score": (0, 0), "home_pct": None, "draw_pct": None, "away_pct": None},
-        {"id": "l4",  "home": "Getafe CF",          "away": "Athletic Bilbao",  "fecha": "Dom 5 Abr · FIN",       "estado": "final",      "score": (2, 0), "home_pct": None, "draw_pct": None, "away_pct": None},
-        {"id": "l5",  "home": "Valencia CF",        "away": "Celta de Vigo",    "fecha": "Dom 5 Abr · FIN",       "estado": "final",      "score": (2, 3), "home_pct": None, "draw_pct": None, "away_pct": None},
-        {"id": "l6",  "home": "Girona FC",          "away": "Villarreal CF",    "fecha": "Lun 6 Abr · FIN",       "estado": "final",      "score": (1, 0), "home_pct": None, "draw_pct": None, "away_pct": None},
-        {"id": "l7",  "home": "Real Madrid",        "away": "Girona FC",        "fecha": "Vie 10 Abr · 21:00",   "estado": "programado", "score": None,  "home_pct": 75.0, "draw_pct": 14.6, "away_pct": 10.4},
-        {"id": "l8",  "home": "Real Sociedad",      "away": "Dep. Alavés",      "fecha": "Sáb 11 Abr · 14:00",   "estado": "programado", "score": None,  "home_pct": 55.1, "draw_pct": 25.2, "away_pct": 19.7},
-        {"id": "l9",  "home": "Elche CF",           "away": "Valencia CF",      "fecha": "Sáb 11 Abr · 16:15",   "estado": "programado", "score": None,  "home_pct": 38.9, "draw_pct": 28.7, "away_pct": 32.4},
-        {"id": "l10", "home": "FC Barcelona",       "away": "Espanyol",         "fecha": "Sáb 11 Abr · 18:30",   "estado": "programado", "score": None,  "home_pct": 77.0, "draw_pct": 13.3, "away_pct":  9.7},
-        {"id": "l11", "home": "Sevilla FC",         "away": "Atlético Madrid",  "fecha": "Sáb 11 Abr · 21:00",   "estado": "programado", "score": None,  "home_pct": 27.8, "draw_pct": 30.2, "away_pct": 42.0},
-        {"id": "l12", "home": "Osasuna",            "away": "Real Betis",       "fecha": "Dom 12 Abr · 14:00",   "estado": "programado", "score": None,  "home_pct": 42.3, "draw_pct": 27.6, "away_pct": 30.1},
-        {"id": "l13", "home": "Mallorca",           "away": "Rayo Vallecano",   "fecha": "Dom 12 Abr · 16:15",   "estado": "programado", "score": None,  "home_pct": 38.8, "draw_pct": 29.4, "away_pct": 31.8},
-        {"id": "l14", "home": "Celta de Vigo",      "away": "Real Oviedo",      "fecha": "Dom 12 Abr · 18:30",   "estado": "programado", "score": None,  "home_pct": 57.8, "draw_pct": 24.0, "away_pct": 18.2},
-        {"id": "l15", "home": "Athletic Bilbao",    "away": "Villarreal CF",    "fecha": "Dom 12 Abr · 21:00",   "estado": "programado", "score": None,  "home_pct": 42.0, "draw_pct": 27.2, "away_pct": 30.8},
-        {"id": "l16", "home": "Levante UD",         "away": "Getafe CF",        "fecha": "Lun 13 Abr · 21:00",   "estado": "programado", "score": None,  "home_pct": 34.4, "draw_pct": 31.7, "away_pct": 33.9},
+        {"id": "l1",  "home": "Atlético Madrid",   "away": "FC Barcelona",     "fecha": "Sáb 4 Abr · FIN",     "estado": "final",      "score": (1, 2), "home_pct": None, "draw_pct": None, "away_pct": None},
+        {"id": "l2",  "home": "Mallorca",           "away": "Real Madrid",      "fecha": "Sáb 4 Abr · FIN",     "estado": "final",      "score": (2, 1), "home_pct": None, "draw_pct": None, "away_pct": None},
+        {"id": "l3",  "home": "Real Betis",         "away": "Espanyol",         "fecha": "Sáb 4 Abr · FIN",     "estado": "final",      "score": (0, 0), "home_pct": None, "draw_pct": None, "away_pct": None},
+        {"id": "l4",  "home": "Getafe CF",          "away": "Athletic Bilbao",  "fecha": "Dom 5 Abr · FIN",     "estado": "final",      "score": (2, 0), "home_pct": None, "draw_pct": None, "away_pct": None},
+        {"id": "l5",  "home": "Valencia CF",        "away": "Celta de Vigo",    "fecha": "Dom 5 Abr · FIN",     "estado": "final",      "score": (2, 3), "home_pct": None, "draw_pct": None, "away_pct": None},
+        {"id": "l6",  "home": "Girona FC",          "away": "Villarreal CF",    "fecha": "Lun 6 Abr · FIN",     "estado": "final",      "score": (1, 0), "home_pct": None, "draw_pct": None, "away_pct": None},
+        {"id": "l7",  "home": "Real Madrid",        "away": "Girona FC",        "fecha": "Vie 10 Abr · 21:00",  "estado": "programado", "score": None,   "home_pct": 75.0, "draw_pct": 14.6, "away_pct": 10.4},
+        {"id": "l8",  "home": "Real Sociedad",      "away": "Dep. Alavés",      "fecha": "Sáb 11 Abr · 14:00",  "estado": "programado", "score": None,   "home_pct": 55.1, "draw_pct": 25.2, "away_pct": 19.7},
+        {"id": "l9",  "home": "Elche CF",           "away": "Valencia CF",      "fecha": "Sáb 11 Abr · 16:15",  "estado": "programado", "score": None,   "home_pct": 38.9, "draw_pct": 28.7, "away_pct": 32.4},
+        {"id": "l10", "home": "FC Barcelona",       "away": "Espanyol",         "fecha": "Sáb 11 Abr · 18:30",  "estado": "programado", "score": None,   "home_pct": 77.0, "draw_pct": 13.3, "away_pct":  9.7},
+        {"id": "l11", "home": "Sevilla FC",         "away": "Atlético Madrid",  "fecha": "Sáb 11 Abr · 21:00",  "estado": "programado", "score": None,   "home_pct": 27.8, "draw_pct": 30.2, "away_pct": 42.0},
+        {"id": "l12", "home": "Osasuna",            "away": "Real Betis",       "fecha": "Dom 12 Abr · 14:00",  "estado": "programado", "score": None,   "home_pct": 42.3, "draw_pct": 27.6, "away_pct": 30.1},
+        {"id": "l13", "home": "Mallorca",           "away": "Rayo Vallecano",   "fecha": "Dom 12 Abr · 16:15",  "estado": "programado", "score": None,   "home_pct": 38.8, "draw_pct": 29.4, "away_pct": 31.8},
+        {"id": "l14", "home": "Celta de Vigo",      "away": "Real Oviedo",      "fecha": "Dom 12 Abr · 18:30",  "estado": "programado", "score": None,   "home_pct": 57.8, "draw_pct": 24.0, "away_pct": 18.2},
+        {"id": "l15", "home": "Athletic Bilbao",    "away": "Villarreal CF",    "fecha": "Dom 12 Abr · 21:00",  "estado": "programado", "score": None,   "home_pct": 42.0, "draw_pct": 27.2, "away_pct": 30.8},
+        {"id": "l16", "home": "Levante UD",         "away": "Getafe CF",        "fecha": "Lun 13 Abr · 21:00",  "estado": "programado", "score": None,   "home_pct": 34.4, "draw_pct": 31.7, "away_pct": 33.9},
     ],
 }
 
@@ -77,8 +88,22 @@ def check_ganada(bet):
     h, a = partido["score"]
     return bet["goles_home"] == h and bet["goles_away"] == a
 
-# ── Cargar apuestas desde Supabase ────────────────────────────────────────────
+# ── Cargar apuestas ───────────────────────────────────────────────────────────
 apuestas = cargar_apuestas()
+
+# ── Estilos ───────────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+    .stApp { background-color: #0f0f1a; }
+    .partido-card {
+        background: rgba(255,255,255,0.05);
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 10px;
+        padding: 12px 16px;
+        margin-bottom: 8px;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # ── Header ────────────────────────────────────────────────────────────────────
 st.title("⚽ Porra Fútbol")
