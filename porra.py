@@ -1,5 +1,6 @@
 import streamlit as st
 import requests
+import hashlib
 
 SUPABASE_URL = st.secrets["supabase"]["url"]
 SUPABASE_KEY = st.secrets["supabase"]["key"]
@@ -11,116 +12,106 @@ HEADERS = {
     "Prefer": "return=representation"
 }
 
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
 # ── Auth helpers ──────────────────────────────────────────────────────────────
-def auth_headers(token):
-    return {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-        "Prefer": "return=representation"
-    }
-
-def registrar(email, password, nombre):
-    r = requests.post(
-        f"{SUPABASE_URL}/auth/v1/signup",
+def registrar(nombre, password):
+    # Comprobar si ya existe
+    r = requests.get(
+        f"{SUPABASE_URL}/rest/v1/usuarios?nombre=eq.{nombre}&select=id",
+        headers=HEADERS, timeout=10
+    )
+    if r.ok and r.json():
+        return None, "Ya existe un usuario con ese nombre"
+    # Crear usuario
+    r2 = requests.post(
+        f"{SUPABASE_URL}/rest/v1/usuarios",
         headers=HEADERS,
-        json={"email": email, "password": password, "data": {"nombre": nombre}},
+        json={"nombre": nombre, "password": hash_password(password)},
         timeout=10
     )
-    return r.json()
+    if r2.ok and r2.json():
+        return r2.json()[0], None
+    return None, "Error al crear el usuario"
 
-def login(email, password):
-    r = requests.post(
-        f"{SUPABASE_URL}/auth/v1/token?grant_type=password",
-        headers=HEADERS,
-        json={"email": email, "password": password},
-        timeout=10
+def login(nombre, password):
+    r = requests.get(
+        f"{SUPABASE_URL}/rest/v1/usuarios?nombre=eq.{nombre}&password=eq.{hash_password(password)}&select=*",
+        headers=HEADERS, timeout=10
     )
-    return r.json()
+    if r.ok and r.json():
+        return r.json()[0], None
+    return None, "Nombre o contraseña incorrectos"
 
-# ── DB helpers ────────────────────────────────────────────────────────────────
-def crear_grupo(nombre, user_id, token):
+# ── Grupos helpers ────────────────────────────────────────────────────────────
+def crear_grupo(nombre_grupo, user_id):
     r = requests.post(
         f"{SUPABASE_URL}/rest/v1/grupos",
-        headers=auth_headers(token),
-        json={"nombre": nombre, "creador_id": user_id},
+        headers=HEADERS,
+        json={"nombre": nombre_grupo, "creador_id": str(user_id)},
         timeout=10
     )
-    data = r.json()
-    if isinstance(data, list) and data:
-        grupo = data[0]
-        # Añadir creador como miembro
+    if r.ok and r.json():
+        grupo = r.json()[0]
         requests.post(
             f"{SUPABASE_URL}/rest/v1/miembros",
-            headers=auth_headers(token),
-            json={"grupo_id": grupo["id"], "user_id": user_id},
+            headers=HEADERS,
+            json={"grupo_id": grupo["id"], "user_id": str(user_id)},
             timeout=10
         )
-        return grupo
-    return None
+        return grupo, None
+    return None, "Error al crear el grupo"
 
-def unirse_grupo(codigo, user_id, token):
-    # Buscar grupo por código
+def unirse_grupo(codigo, user_id):
     r = requests.get(
         f"{SUPABASE_URL}/rest/v1/grupos?codigo=eq.{codigo}&select=*",
-        headers=auth_headers(token),
-        timeout=10
+        headers=HEADERS, timeout=10
     )
-    grupos = r.json()
-    if not grupos:
+    if not r.ok or not r.json():
         return None, "Código de invitación no válido"
-    grupo = grupos[0]
-    # Unirse
+    grupo = r.json()[0]
     r2 = requests.post(
         f"{SUPABASE_URL}/rest/v1/miembros",
-        headers=auth_headers(token),
-        json={"grupo_id": grupo["id"], "user_id": user_id},
+        headers=HEADERS,
+        json={"grupo_id": grupo["id"], "user_id": str(user_id)},
         timeout=10
     )
     if r2.status_code in [200, 201]:
         return grupo, None
     elif "unique" in r2.text.lower():
-        return grupo, "Ya eres miembro de este grupo"
+        return grupo, "ya_miembro"
     return None, "Error al unirse al grupo"
 
-def get_mis_grupos(user_id, token):
+def get_mis_grupos(user_id):
     r = requests.get(
         f"{SUPABASE_URL}/rest/v1/miembros?user_id=eq.{user_id}&select=grupo_id,grupos(*)",
-        headers=auth_headers(token),
-        timeout=10
+        headers=HEADERS, timeout=10
     )
     data = r.json()
     return [d["grupos"] for d in data if d.get("grupos")] if isinstance(data, list) else []
 
-def cargar_apuestas(grupo_id, token):
+# ── Apuestas helpers ──────────────────────────────────────────────────────────
+def cargar_apuestas(grupo_id):
     r = requests.get(
         f"{SUPABASE_URL}/rest/v1/apuestas?grupo_id=eq.{grupo_id}&order=id.asc",
-        headers=auth_headers(token),
-        timeout=10
+        headers=HEADERS, timeout=10
     )
     return r.json() if r.ok else []
 
-def guardar_apuesta(apuesta, token):
-    requests.post(
-        f"{SUPABASE_URL}/rest/v1/apuestas",
-        headers=auth_headers(token),
-        json=apuesta,
-        timeout=10
-    )
+def guardar_apuesta(apuesta):
+    requests.post(f"{SUPABASE_URL}/rest/v1/apuestas", headers=HEADERS, json=apuesta, timeout=10)
 
-def actualizar_pagado(apuesta_id, pagado, token):
+def actualizar_pagado(apuesta_id, pagado):
     requests.patch(
         f"{SUPABASE_URL}/rest/v1/apuestas?id=eq.{apuesta_id}",
-        headers=auth_headers(token),
-        json={"pagado": pagado},
-        timeout=10
+        headers=HEADERS, json={"pagado": pagado}, timeout=10
     )
 
-def eliminar_apuesta(apuesta_id, token):
+def eliminar_apuesta(apuesta_id):
     requests.delete(
         f"{SUPABASE_URL}/rest/v1/apuestas?id=eq.{apuesta_id}",
-        headers=auth_headers(token),
-        timeout=10
+        headers=HEADERS, timeout=10
     )
 
 # ── Datos partidos ────────────────────────────────────────────────────────────
@@ -180,68 +171,63 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ── Session state ─────────────────────────────────────────────────────────────
-if "token" not in st.session_state:
-    st.session_state.token = None
-if "user_id" not in st.session_state:
-    st.session_state.user_id = None
-if "nombre" not in st.session_state:
-    st.session_state.nombre = None
-if "grupo" not in st.session_state:
-    st.session_state.grupo = None
+for key in ["user", "grupo"]:
+    if key not in st.session_state:
+        st.session_state[key] = None
 
-# ── Capturar código de invitación desde URL ───────────────────────────────────
-params = st.query_params
-invite_code = params.get("invite", None)
+# ── Capturar código invitación desde URL ──────────────────────────────────────
+invite_code = st.query_params.get("invite", None)
 
 # ════════════════════════════════════════════════════════════════════════════
 # PANTALLA LOGIN / REGISTRO
 # ════════════════════════════════════════════════════════════════════════════
-if not st.session_state.token:
+if not st.session_state.user:
     st.title("⚽ Porra Fútbol")
-
     if invite_code:
-        st.info(f"🎉 Has sido invitado a unirte a un grupo. Regístrate o inicia sesión para continuar.")
+        st.info("🎉 Has sido invitado. Regístrate o inicia sesión para continuar.")
 
     tab_login, tab_reg = st.tabs(["🔑 Iniciar sesión", "📝 Registrarse"])
 
     with tab_login:
-        email    = st.text_input("Email", key="login_email")
-        password = st.text_input("Contraseña", type="password", key="login_pass")
-        if st.button("Entrar", use_container_width=True, type="primary"):
-            res = login(email, password)
-            if "access_token" in res:
-                st.session_state.token   = res["access_token"]
-                st.session_state.user_id = res["user"]["id"]
-                st.session_state.nombre  = res["user"].get("user_metadata", {}).get("nombre", email)
-                st.rerun()
+        nombre_l   = st.text_input("Nombre de usuario", key="l_nombre")
+        password_l = st.text_input("Contraseña", type="password", key="l_pass")
+        if st.button("Entrar", use_container_width=True, type="primary", key="btn_login"):
+            if nombre_l.strip() and password_l:
+                user, err = login(nombre_l.strip(), password_l)
+                if user:
+                    st.session_state.user = user
+                    st.rerun()
+                else:
+                    st.error(f"❌ {err}")
             else:
-                msg = res.get("error_description", res.get("msg", "Error al iniciar sesión"))
-                st.error(f"❌ {msg}")
+                st.error("Rellena todos los campos")
 
     with tab_reg:
-        nombre   = st.text_input("Tu nombre", key="reg_nombre")
-        email    = st.text_input("Email", key="reg_email")
-        password = st.text_input("Contraseña", type="password", key="reg_pass")
-        if st.button("Crear cuenta", use_container_width=True, type="primary"):
-            res = registrar(email, password, nombre)
-            if "id" in res or ("user" in res and res["user"]):
-                st.success("✅ Cuenta creada. Ya puedes iniciar sesión.")
+        nombre_r   = st.text_input("Elige un nombre de usuario", key="r_nombre")
+        password_r = st.text_input("Contraseña", type="password", key="r_pass")
+        password_r2 = st.text_input("Repite la contraseña", type="password", key="r_pass2")
+        if st.button("Crear cuenta", use_container_width=True, type="primary", key="btn_reg"):
+            if not nombre_r.strip() or not password_r:
+                st.error("Rellena todos los campos")
+            elif password_r != password_r2:
+                st.error("Las contraseñas no coinciden")
             else:
-                msg = res.get("error_description", res.get("msg", str(res)))
-                st.error(f"❌ {msg}")
-
+                user, err = registrar(nombre_r.strip(), password_r)
+                if user:
+                    st.session_state.user = user
+                    st.rerun()
+                else:
+                    st.error(f"❌ {err}")
     st.stop()
 
 # ════════════════════════════════════════════════════════════════════════════
 # USUARIO LOGUEADO — SELECCIÓN DE GRUPO
 # ════════════════════════════════════════════════════════════════════════════
-token   = st.session_state.token
-user_id = st.session_state.user_id
-nombre  = st.session_state.nombre
+user = st.session_state.user
 
-# Si viene con código de invitación, unirse automáticamente
+# Unirse automáticamente si viene con código de invitación
 if invite_code and not st.session_state.grupo:
-    grupo, err = unirse_grupo(invite_code, user_id, token)
+    grupo, err = unirse_grupo(invite_code, user["id"])
     if grupo:
         st.session_state.grupo = grupo
         st.query_params.clear()
@@ -249,10 +235,16 @@ if invite_code and not st.session_state.grupo:
 
 if not st.session_state.grupo:
     st.title("⚽ Porra Fútbol")
-    st.markdown(f"Hola, **{nombre}** 👋")
-    st.divider()
+    st.markdown(f"Hola, **{user['nombre']}** 👋")
 
-    mis_grupos = get_mis_grupos(user_id, token)
+    col_cambiar, _ = st.columns([1, 3])
+    if col_cambiar.button("Cerrar sesión"):
+        st.session_state.user  = None
+        st.session_state.grupo = None
+        st.rerun()
+
+    st.divider()
+    mis_grupos = get_mis_grupos(str(user["id"]))
 
     tab_mis, tab_crear, tab_unir = st.tabs(["📋 Mis grupos", "➕ Crear grupo", "🔗 Unirse con código"])
 
@@ -270,49 +262,47 @@ if not st.session_state.grupo:
         nombre_grupo = st.text_input("Nombre del grupo (ej: Peñas del Bar)")
         if st.button("Crear grupo", use_container_width=True, type="primary"):
             if not nombre_grupo.strip():
-                st.error("Escribe un nombre para el grupo")
+                st.error("Escribe un nombre")
             else:
-                grupo = crear_grupo(nombre_grupo.strip(), user_id, token)
+                grupo, err = crear_grupo(nombre_grupo.strip(), user["id"])
                 if grupo:
                     st.session_state.grupo = grupo
                     st.rerun()
                 else:
-                    st.error("Error al crear el grupo")
+                    st.error(f"❌ {err}")
 
     with tab_unir:
         codigo = st.text_input("Código de invitación")
         if st.button("Unirse", use_container_width=True, type="primary"):
-            grupo, err = unirse_grupo(codigo.strip(), user_id, token)
+            grupo, err = unirse_grupo(codigo.strip(), user["id"])
             if grupo:
+                st.session_state.grupo = grupo
+                st.rerun()
+            elif err == "ya_miembro":
                 st.session_state.grupo = grupo
                 st.rerun()
             else:
                 st.error(f"❌ {err}")
-
     st.stop()
 
 # ════════════════════════════════════════════════════════════════════════════
-# APP PRINCIPAL — DENTRO DEL GRUPO
+# APP PRINCIPAL
 # ════════════════════════════════════════════════════════════════════════════
-grupo   = st.session_state.grupo
-apuestas = cargar_apuestas(grupo["id"], token)
+grupo    = st.session_state.grupo
+apuestas = cargar_apuestas(grupo["id"])
 
-# Header
 col_t, col_out = st.columns([4, 1])
 col_t.title("⚽ Porra Fútbol")
-col_t.caption(f"Grupo: **{grupo['nombre']}** · {nombre}")
-if col_out.button("Salir", key="logout"):
-    st.session_state.token   = None
-    st.session_state.user_id = None
-    st.session_state.nombre  = None
-    st.session_state.grupo   = None
+col_t.caption(f"Grupo: **{grupo['nombre']}** · {user['nombre']}")
+if col_out.button("Salir"):
+    st.session_state.grupo = None
     st.rerun()
 
 # Link de invitación
-app_url = st.secrets.get("app_url", "https://tu-app.streamlit.app")
+app_url    = st.secrets.get("app_url", "https://tu-app.streamlit.app")
 invite_url = f"{app_url}?invite={grupo['codigo']}"
 with st.expander("🔗 Invitar al grupo"):
-    st.markdown(f"Comparte este enlace con tus amigos:")
+    st.markdown("Comparte este enlace:")
     st.code(invite_url)
     st.caption(f"O el código: **{grupo['codigo']}**")
 
@@ -329,25 +319,20 @@ if total > 0:
 
 st.divider()
 
-tab_partidos, tab_apuestas = st.tabs(["🏟️ Partidos & Nueva apuesta", "📋 Apuestas del grupo"])
+tab_partidos, tab_apuestas_tab = st.tabs(["🏟️ Partidos & Nueva apuesta", "📋 Apuestas del grupo"])
 
-# ── TAB 1 — NUEVA APUESTA ─────────────────────────────────────────────────────
+# ── TAB 1 ─────────────────────────────────────────────────────────────────────
 with tab_partidos:
     st.subheader("➕ Registrar apuesta")
 
-    jugador     = st.text_input("👤 Nombre del apostador", value=nombre, key="jugador")
+    jugador     = st.text_input("👤 Nombre del apostador", value=user["nombre"], key="jugador")
     cantidad    = st.number_input("💶 Cantidad (€)", min_value=0.5, value=10.0, step=0.5, key="cantidad")
     competicion = st.selectbox("🏆 Competición", list(PARTIDOS.keys()), key="competicion")
 
     partidos_comp = PARTIDOS[competicion]
     opciones = []
     for p in partidos_comp:
-        if p["estado"] == "final":
-            icono = "✅"
-        elif "Hoy" in p["fecha"]:
-            icono = "🔴 HOY"
-        else:
-            icono = "🕐"
+        icono = "✅" if p["estado"] == "final" else ("🔴 HOY" if "Hoy" in p["fecha"] else "🕐")
         score_str = f" ({p['score'][0]}-{p['score'][1]})" if p.get("score") else ""
         opciones.append(f"{icono}  {p['home']} vs {p['away']}{score_str}  ·  {p['fecha']}")
 
@@ -368,13 +353,12 @@ with tab_partidos:
         goles_away = st.number_input("ga", min_value=0, max_value=20, value=0, step=1,
                                      key="goles_away", label_visibility="collapsed")
 
-    st.markdown(
-        f"<div style='text-align:center;font-size:2em;font-weight:900;color:#fbbf24;margin:8px 0'>"
-        f"{goles_home} - {goles_away}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div style='text-align:center;font-size:2em;font-weight:900;color:#fbbf24;margin:8px 0'>"
+                f"{goles_home} - {goles_away}</div>", unsafe_allow_html=True)
 
     if st.button("💾 Registrar apuesta", use_container_width=True, type="primary"):
         if not jugador.strip():
-            st.error("⚠️ Escribe el nombre del apostador")
+            st.error("⚠️ Escribe el nombre")
         else:
             guardar_apuesta({
                 "jugador":     jugador.strip(),
@@ -385,8 +369,8 @@ with tab_partidos:
                 "cantidad":    float(cantidad),
                 "pagado":      False,
                 "grupo_id":    grupo["id"],
-                "user_id":     user_id,
-            }, token)
+                "user_id":     str(user["id"]),
+            })
             st.success(f"✅ **{jugador}** apuesta **{goles_home}-{goles_away}** → {cantidad:.2f}€")
             st.rerun()
 
@@ -435,13 +419,12 @@ with tab_partidos:
                     </div>""", unsafe_allow_html=True)
         st.markdown("")
 
-# ── TAB 2 — APUESTAS DEL GRUPO ────────────────────────────────────────────────
-with tab_apuestas:
+# ── TAB 2 ─────────────────────────────────────────────────────────────────────
+with tab_apuestas_tab:
     if not apuestas:
         st.info("📭 Aún no hay apuestas en este grupo.")
     else:
         filtro = st.radio("Filtrar", ["Todas", "✅ Pagadas", "⏳ Pendientes"], horizontal=True)
-
         lista_filtrada = apuestas
         if filtro == "✅ Pagadas":
             lista_filtrada = [b for b in apuestas if b["pagado"]]
@@ -500,11 +483,11 @@ with tab_apuestas:
                     key=f"chk_{bet['id']}"
                 )
                 if nuevo != bet["pagado"]:
-                    actualizar_pagado(bet["id"], nuevo, token)
+                    actualizar_pagado(bet["id"], nuevo)
                     st.rerun()
             with col_del:
                 if st.button("🗑️", key=f"del_{bet['id']}"):
-                    eliminar_apuesta(bet["id"], token)
+                    eliminar_apuesta(bet["id"])
                     st.rerun()
 
         st.divider()
