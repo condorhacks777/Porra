@@ -1,7 +1,6 @@
 import streamlit as st
 import requests
 
-# ── Conexión Supabase via REST directo ────────────────────────────────────────
 SUPABASE_URL = st.secrets["supabase"]["url"]
 SUPABASE_KEY = st.secrets["supabase"]["key"]
 
@@ -13,33 +12,51 @@ HEADERS = {
 }
 
 def cargar_apuestas():
-    r = requests.get(
-        f"{SUPABASE_URL}/rest/v1/apuestas?order=id.asc",
-        headers=HEADERS
-    )
-    return r.json() if r.ok else []
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/apuestas?order=id.asc",
+            headers=HEADERS,
+            timeout=10
+        )
+        if r.ok:
+            return r.json()
+        else:
+            st.error(f"Error cargando: {r.status_code} - {r.text}")
+            return []
+    except Exception as e:
+        st.error(f"Excepción cargando: {e}")
+        return []
 
 def guardar_apuesta(apuesta: dict):
-    requests.post(
-        f"{SUPABASE_URL}/rest/v1/apuestas",
-        headers=HEADERS,
-        json=apuesta
-    )
+    try:
+        r = requests.post(
+            f"{SUPABASE_URL}/rest/v1/apuestas",
+            headers=HEADERS,
+            json=apuesta,
+            timeout=10
+        )
+        if r.ok:
+            st.success(f"✅ Guardado correctamente")
+        else:
+            st.error(f"Error guardando: {r.status_code} - {r.text}")
+    except Exception as e:
+        st.error(f"Excepción guardando: {e}")
 
 def actualizar_pagado(apuesta_id: int, pagado: bool):
     requests.patch(
         f"{SUPABASE_URL}/rest/v1/apuestas?id=eq.{apuesta_id}",
         headers=HEADERS,
-        json={"pagado": pagado}
+        json={"pagado": pagado},
+        timeout=10
     )
 
 def eliminar_apuesta(apuesta_id: int):
     requests.delete(
         f"{SUPABASE_URL}/rest/v1/apuestas?id=eq.{apuesta_id}",
-        headers=HEADERS
+        headers=HEADERS,
+        timeout=10
     )
 
-# ── Datos reales de partidos ──────────────────────────────────────────────────
 PARTIDOS = {
     "🏆 Champions League": [
         {"id": "c1",  "home": "Real Madrid",      "away": "Bayern Munich",    "fecha": "Mar 7 Abr · FIN",      "estado": "final",      "score": (1, 2), "home_pct": None, "draw_pct": None, "away_pct": None},
@@ -88,26 +105,23 @@ def check_ganada(bet):
     h, a = partido["score"]
     return bet["goles_home"] == h and bet["goles_away"] == a
 
-# ── Cargar apuestas ───────────────────────────────────────────────────────────
 apuestas = cargar_apuestas()
 
-# ── Estilos ───────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
     .stApp { background-color: #0f0f1a; }
-    .partido-card {
-        background: rgba(255,255,255,0.05);
-        border: 1px solid rgba(255,255,255,0.1);
-        border-radius: 10px;
-        padding: 12px 16px;
-        margin-bottom: 8px;
-    }
 </style>
 """, unsafe_allow_html=True)
 
-# ── Header ────────────────────────────────────────────────────────────────────
 st.title("⚽ Porra Fútbol")
 st.caption("LaLiga · Champions League · Marcador exacto")
+
+# Debug info
+with st.expander("🔧 Debug conexión"):
+    st.write(f"URL: {SUPABASE_URL}")
+    st.write(f"Apuestas cargadas: {len(apuestas)}")
+    if apuestas:
+        st.write(apuestas)
 
 total     = sum(b["cantidad"] for b in apuestas)
 cobrado   = sum(b["cantidad"] for b in apuestas if b["pagado"])
@@ -124,11 +138,7 @@ st.divider()
 
 tab_partidos, tab_apuestas = st.tabs(["🏟️ Partidos & Nueva apuesta", "📋 Mis Apuestas"])
 
-# ════════════════════════════════════════════════════════════════════════════
-# TAB 1 — NUEVA APUESTA
-# ════════════════════════════════════════════════════════════════════════════
 with tab_partidos:
-
     st.subheader("➕ Registrar apuesta")
 
     jugador     = st.text_input("👤 Nombre del apostador", key="jugador")
@@ -183,7 +193,6 @@ with tab_partidos:
                 "cantidad":    float(cantidad),
                 "pagado":      False,
             })
-            st.success(f"✅ **{jugador}** apuesta **{goles_home}-{goles_away}** → {cantidad:.2f}€")
             st.rerun()
 
     st.divider()
@@ -231,11 +240,7 @@ with tab_partidos:
                     </div>""", unsafe_allow_html=True)
         st.markdown("")
 
-# ════════════════════════════════════════════════════════════════════════════
-# TAB 2 — APUESTAS GUARDADAS
-# ════════════════════════════════════════════════════════════════════════════
 with tab_apuestas:
-
     if not apuestas:
         st.info("📭 Aún no hay apuestas. ¡Ve a Partidos para añadir la primera!")
     else:
