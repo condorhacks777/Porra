@@ -13,50 +13,30 @@ HEADERS = {
 
 def cargar_apuestas():
     try:
-        r = requests.get(
-            f"{SUPABASE_URL}/rest/v1/apuestas?order=id.asc",
-            headers=HEADERS,
-            timeout=10
-        )
-        if r.ok:
-            return r.json()
-        else:
-            st.error(f"Error cargando: {r.status_code} - {r.text}")
-            return []
-    except Exception as e:
-        st.error(f"Excepción cargando: {e}")
+        r = requests.get(f"{SUPABASE_URL}/rest/v1/apuestas?order=id.asc", headers=HEADERS, timeout=10)
+        return r.json() if r.ok else []
+    except:
         return []
 
-def guardar_apuesta(apuesta: dict):
+def guardar_apuesta(apuesta):
     try:
-        r = requests.post(
-            f"{SUPABASE_URL}/rest/v1/apuestas",
-            headers=HEADERS,
-            json=apuesta,
-            timeout=10
-        )
-        if r.ok:
-            st.success(f"✅ Guardado correctamente")
-        else:
-            st.error(f"Error guardando: {r.status_code} - {r.text}")
-    except Exception as e:
-        st.error(f"Excepción guardando: {e}")
+        requests.post(f"{SUPABASE_URL}/rest/v1/apuestas", headers=HEADERS, json=apuesta, timeout=10)
+    except:
+        st.error("❌ Error al guardar la apuesta")
 
-def actualizar_pagado(apuesta_id: int, pagado: bool):
-    requests.patch(
-        f"{SUPABASE_URL}/rest/v1/apuestas?id=eq.{apuesta_id}",
-        headers=HEADERS,
-        json={"pagado": pagado},
-        timeout=10
-    )
+def actualizar_pagado(apuesta_id, pagado):
+    try:
+        requests.patch(f"{SUPABASE_URL}/rest/v1/apuestas?id=eq.{apuesta_id}", headers=HEADERS, json={"pagado": pagado}, timeout=10)
+    except:
+        pass
 
-def eliminar_apuesta(apuesta_id: int):
-    requests.delete(
-        f"{SUPABASE_URL}/rest/v1/apuestas?id=eq.{apuesta_id}",
-        headers=HEADERS,
-        timeout=10
-    )
+def eliminar_apuesta(apuesta_id):
+    try:
+        requests.delete(f"{SUPABASE_URL}/rest/v1/apuestas?id=eq.{apuesta_id}", headers=HEADERS, timeout=10)
+    except:
+        pass
 
+# ── Datos reales de partidos ──────────────────────────────────────────────────
 PARTIDOS = {
     "🏆 Champions League": [
         {"id": "c1",  "home": "Real Madrid",      "away": "Bayern Munich",    "fecha": "Mar 7 Abr · FIN",      "estado": "final",      "score": (1, 2), "home_pct": None, "draw_pct": None, "away_pct": None},
@@ -105,6 +85,7 @@ def check_ganada(bet):
     h, a = partido["score"]
     return bet["goles_home"] == h and bet["goles_away"] == a
 
+# ── Cargar apuestas ───────────────────────────────────────────────────────────
 apuestas = cargar_apuestas()
 
 st.markdown("""
@@ -113,15 +94,9 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# ── Header ────────────────────────────────────────────────────────────────────
 st.title("⚽ Porra Fútbol")
 st.caption("LaLiga · Champions League · Marcador exacto")
-
-# Debug info
-with st.expander("🔧 Debug conexión"):
-    st.write(f"URL: {SUPABASE_URL}")
-    st.write(f"Apuestas cargadas: {len(apuestas)}")
-    if apuestas:
-        st.write(apuestas)
 
 total     = sum(b["cantidad"] for b in apuestas)
 cobrado   = sum(b["cantidad"] for b in apuestas if b["pagado"])
@@ -138,6 +113,9 @@ st.divider()
 
 tab_partidos, tab_apuestas = st.tabs(["🏟️ Partidos & Nueva apuesta", "📋 Mis Apuestas"])
 
+# ════════════════════════════════════════════════════════════════════════════
+# TAB 1 — NUEVA APUESTA
+# ════════════════════════════════════════════════════════════════════════════
 with tab_partidos:
     st.subheader("➕ Registrar apuesta")
 
@@ -176,9 +154,7 @@ with tab_partidos:
 
     st.markdown(
         f"<div style='text-align:center;font-size:2em;font-weight:900;color:#fbbf24;margin:8px 0'>"
-        f"{goles_home} - {goles_away}</div>",
-        unsafe_allow_html=True
-    )
+        f"{goles_home} - {goles_away}</div>", unsafe_allow_html=True)
 
     if st.button("💾 Registrar apuesta", use_container_width=True, type="primary"):
         if not jugador.strip():
@@ -193,6 +169,7 @@ with tab_partidos:
                 "cantidad":    float(cantidad),
                 "pagado":      False,
             })
+            st.success(f"✅ **{jugador}** apuesta **{goles_home}-{goles_away}** → {cantidad:.2f}€")
             st.rerun()
 
     st.divider()
@@ -240,6 +217,9 @@ with tab_partidos:
                     </div>""", unsafe_allow_html=True)
         st.markdown("")
 
+# ════════════════════════════════════════════════════════════════════════════
+# TAB 2 — APUESTAS GUARDADAS
+# ════════════════════════════════════════════════════════════════════════════
 with tab_apuestas:
     if not apuestas:
         st.info("📭 Aún no hay apuestas. ¡Ve a Partidos para añadir la primera!")
@@ -277,9 +257,9 @@ with tab_apuestas:
             color_bg     = "rgba(34,197,94,0.08)" if bet["pagado"] else "rgba(239,68,68,0.08)"
             badge_txt    = "✅ PAGADO" if bet["pagado"] else "⏳ PENDIENTE"
 
-            st.markdown(
-                f"""<div style="background:{color_bg};border:1.5px solid {color_border};
-                border-radius:12px;padding:14px 18px;margin-bottom:4px">
+            st.markdown(f"""
+            <div style="background:{color_bg};border:1.5px solid {color_border};
+            border-radius:12px;padding:14px 18px;margin-bottom:4px">
                 <div style="display:flex;justify-content:space-between">
                     <b style="font-size:1.1em">{bet['jugador']}</b>
                     <b style="color:{color_border}">{badge_txt}</b>
@@ -288,18 +268,13 @@ with tab_apuestas:
                 <div style="color:#d1d5db;font-size:0.9em">⚽ {partido_str}</div>
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">
                     <div>
-                        <span style="font-size:1.8em;font-weight:900;color:#fbbf24">
-                            {bet['goles_home']} - {bet['goles_away']}
-                        </span>
-                        <span style="color:#9ca3af;font-size:0.85em">{real_score_txt}</span>
-                        <br>
+                        <span style="font-size:1.8em;font-weight:900;color:#fbbf24">{bet['goles_home']} - {bet['goles_away']}</span>
+                        <span style="color:#9ca3af;font-size:0.85em">{real_score_txt}</span><br>
                         <span>{estado_icon} {estado_txt}</span>
                     </div>
                     <span style="font-size:1.3em;font-weight:900;color:#fbbf24">{bet['cantidad']:.2f}€</span>
                 </div>
-                </div>""",
-                unsafe_allow_html=True
-            )
+            </div>""", unsafe_allow_html=True)
 
             col_chk, col_del = st.columns([3, 1])
             with col_chk:
