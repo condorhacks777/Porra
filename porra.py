@@ -1,25 +1,34 @@
 import streamlit as st
+from supabase import create_client, Client
 
-st.set_page_config(
-    page_title="⚽ Porra Fútbol",
-    page_icon="⚽",
-    layout="centered"
-)
+# ── Conexión Supabase ─────────────────────────────────────────────────────────
+# Pon tus credenciales en Streamlit > Settings > Secrets así:
+#   [supabase]
+#   url = "https://XXXXXXXX.supabase.co"
+#   key = "eyJ..."
 
-st.markdown("""
-<style>
-    .stApp { background-color: #0f0f1a; }
-    .partido-card {
-        background: rgba(255,255,255,0.05);
-        border: 1px solid rgba(255,255,255,0.1);
-        border-radius: 10px;
-        padding: 12px 16px;
-        margin-bottom: 8px;
-    }
-</style>
-""", unsafe_allow_html=True)
+@st.cache_resource
+def get_supabase() -> Client:
+    url = st.secrets["supabase"]["url"]
+    key = st.secrets["supabase"]["key"]
+    return create_client(url, key)
 
-# ── Datos reales ──────────────────────────────────────────────────────────────
+supabase = get_supabase()
+
+def cargar_apuestas():
+    res = supabase.table("apuestas").select("*").order("id", desc=False).execute()
+    return res.data or []
+
+def guardar_apuesta(apuesta: dict):
+    supabase.table("apuestas").insert(apuesta).execute()
+
+def actualizar_pagado(apuesta_id: int, pagado: bool):
+    supabase.table("apuestas").update({"pagado": pagado}).eq("id", apuesta_id).execute()
+
+def eliminar_apuesta(apuesta_id: int):
+    supabase.table("apuestas").delete().eq("id", apuesta_id).execute()
+
+# ── Datos reales de partidos ──────────────────────────────────────────────────
 PARTIDOS = {
     "🏆 Champions League": [
         {"id": "c1",  "home": "Real Madrid",      "away": "Bayern Munich",    "fecha": "Mar 7 Abr · FIN",        "estado": "final",      "score": (1, 2), "home_pct": None, "draw_pct": None, "away_pct": None},
@@ -29,8 +38,8 @@ PARTIDOS = {
         {"id": "c5",  "home": "Bayern Munich",     "away": "Atalanta BC",      "fecha": "Mié 18 Mar · FIN",       "estado": "final",      "score": (4, 1), "home_pct": None, "draw_pct": None, "away_pct": None},
         {"id": "c6",  "home": "Manchester City",   "away": "Real Madrid",      "fecha": "Mar 17 Mar · FIN",       "estado": "final",      "score": (1, 2), "home_pct": None, "draw_pct": None, "away_pct": None},
         {"id": "c7",  "home": "Chelsea FC",        "away": "PSG",              "fecha": "Mar 17 Mar · FIN",       "estado": "final",      "score": (0, 3), "home_pct": None, "draw_pct": None, "away_pct": None},
-        {"id": "c8",  "home": "PSG",               "away": "Liverpool FC",     "fecha": "Hoy Mié 8 Abr · 21:00", "estado": "programado", "score": None,  "home_pct": 54.2, "draw_pct": 23.1, "away_pct": 22.7},
-        {"id": "c9",  "home": "FC Barcelona",      "away": "Atlético Madrid",  "fecha": "Hoy Mié 8 Abr · 21:00", "estado": "programado", "score": None,  "home_pct": 63.6, "draw_pct": 18.7, "away_pct": 17.7},
+        {"id": "c8",  "home": "PSG",               "away": "Liverpool FC",     "fecha": "Mié 8 Abr · 21:00",     "estado": "programado", "score": None,  "home_pct": 54.2, "draw_pct": 23.1, "away_pct": 22.7},
+        {"id": "c9",  "home": "FC Barcelona",      "away": "Atlético Madrid",  "fecha": "Mié 8 Abr · 21:00",     "estado": "programado", "score": None,  "home_pct": 63.6, "draw_pct": 18.7, "away_pct": 17.7},
         {"id": "c10", "home": "Liverpool FC",      "away": "PSG",              "fecha": "Mar 14 Abr · 21:00",    "estado": "programado", "score": None,  "home_pct": 24.5, "draw_pct": 23.0, "away_pct": 52.5},
         {"id": "c11", "home": "Atlético Madrid",   "away": "FC Barcelona",     "fecha": "Mar 14 Abr · 21:00",    "estado": "programado", "score": None,  "home_pct": 19.2, "draw_pct": 19.6, "away_pct": 61.2},
         {"id": "c12", "home": "Bayern Munich",     "away": "Real Madrid",      "fecha": "Mié 15 Abr · 21:00",   "estado": "programado", "score": None,  "home_pct": 60.8, "draw_pct": 19.2, "away_pct": 20.0},
@@ -58,9 +67,6 @@ PARTIDOS = {
 
 TODOS_PARTIDOS = [p for lista in PARTIDOS.values() for p in lista]
 
-if "apuestas" not in st.session_state:
-    st.session_state.apuestas = []
-
 def get_partido(pid):
     return next((p for p in TODOS_PARTIDOS if p["id"] == pid), None)
 
@@ -71,11 +77,13 @@ def check_ganada(bet):
     h, a = partido["score"]
     return bet["goles_home"] == h and bet["goles_away"] == a
 
+# ── Cargar apuestas desde Supabase ────────────────────────────────────────────
+apuestas = cargar_apuestas()
+
 # ── Header ────────────────────────────────────────────────────────────────────
 st.title("⚽ Porra Fútbol")
 st.caption("LaLiga · Champions League · Marcador exacto")
 
-apuestas  = st.session_state.apuestas
 total     = sum(b["cantidad"] for b in apuestas)
 cobrado   = sum(b["cantidad"] for b in apuestas if b["pagado"])
 pendiente = total - cobrado
@@ -92,7 +100,7 @@ st.divider()
 tab_partidos, tab_apuestas = st.tabs(["🏟️ Partidos & Nueva apuesta", "📋 Mis Apuestas"])
 
 # ════════════════════════════════════════════════════════════════════════════
-# TAB 1 — NUEVA APUESTA  (sin st.form para que el partido se actualice en vivo)
+# TAB 1 — NUEVA APUESTA
 # ════════════════════════════════════════════════════════════════════════════
 with tab_partidos:
 
@@ -117,7 +125,6 @@ with tab_partidos:
     partido_sel = st.selectbox("⚽ Partido", opciones, key="partido_sel")
     partido_obj = partidos_comp[opciones.index(partido_sel)]
 
-    # Marcador — se actualiza en tiempo real con el partido seleccionado
     st.markdown(f"**🎯 Marcador para: {partido_obj['home']} vs {partido_obj['away']}**")
     col_gh, col_sep, col_ga = st.columns([5, 1, 5])
     with col_gh:
@@ -142,13 +149,13 @@ with tab_partidos:
         if not jugador.strip():
             st.error("⚠️ Escribe el nombre del apostador")
         else:
-            st.session_state.apuestas.append({
+            guardar_apuesta({
                 "jugador":     jugador.strip(),
                 "partido_id":  partido_obj["id"],
                 "competicion": competicion,
-                "goles_home":  goles_home,
-                "goles_away":  goles_away,
-                "cantidad":    cantidad,
+                "goles_home":  int(goles_home),
+                "goles_away":  int(goles_away),
+                "cantidad":    float(cantidad),
                 "pagado":      False,
             })
             st.success(f"✅ **{jugador}** apuesta **{goles_home}-{goles_away}** → {cantidad:.2f}€")
@@ -156,10 +163,8 @@ with tab_partidos:
 
     st.divider()
 
-    # Lista de partidos
     for comp, lista in PARTIDOS.items():
         st.subheader(comp)
-
         hoy  = [p for p in lista if p["estado"] == "programado" and "Hoy" in p["fecha"]]
         prog = [p for p in lista if p["estado"] == "programado" and "Hoy" not in p["fecha"]]
         fin  = [p for p in lista if p["estado"] == "final"]
@@ -167,7 +172,8 @@ with tab_partidos:
         if hoy:
             st.markdown("**🔴 HOY**")
             for p in hoy:
-                st.markdown(f"""<div class="partido-card" style="border-color:rgba(239,68,68,0.6)">
+                st.markdown(f"""<div style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.5);
+                border-radius:10px;padding:12px;margin-bottom:8px">
                 <small style="color:#ef4444;font-weight:700">🔴 HOY · {p['fecha']}</small><br>
                 <b>{p['home']}</b> vs <b>{p['away']}</b></div>""", unsafe_allow_html=True)
                 c1, c2, c3 = st.columns(3)
@@ -178,7 +184,8 @@ with tab_partidos:
         if prog:
             st.markdown("**🕐 Próximos**")
             for p in prog:
-                st.markdown(f"""<div class="partido-card">
+                st.markdown(f"""<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);
+                border-radius:10px;padding:12px;margin-bottom:8px">
                 <small style="color:#fbbf24">{p['fecha']}</small><br>
                 <b>{p['home']}</b> vs <b>{p['away']}</b></div>""", unsafe_allow_html=True)
                 c1, c2, c3 = st.columns(3)
@@ -190,7 +197,8 @@ with tab_partidos:
             with st.expander(f"✅ Resultados recientes ({len(fin)})"):
                 for p in fin:
                     h, a = p["score"]
-                    st.markdown(f"""<div class="partido-card">
+                    st.markdown(f"""<div style="background:rgba(34,197,94,0.06);border:1px solid rgba(34,197,94,0.2);
+                    border-radius:10px;padding:12px;margin-bottom:6px">
                     <small style="color:#86efac">✓ FINALIZADO · {p['fecha']}</small><br>
                     <b {'style="color:#22c55e"' if h > a else ''}>{p['home']}</b>
                     &nbsp;<span style="font-size:1.3em;font-weight:900">{h} - {a}</span>&nbsp;
@@ -199,7 +207,7 @@ with tab_partidos:
         st.markdown("")
 
 # ════════════════════════════════════════════════════════════════════════════
-# TAB 2 — APUESTAS  (sin HTML inline, todo con componentes nativos)
+# TAB 2 — APUESTAS GUARDADAS
 # ════════════════════════════════════════════════════════════════════════════
 with tab_apuestas:
 
@@ -218,30 +226,23 @@ with tab_apuestas:
             st.info("No hay apuestas en esta categoría.")
 
         for bet in lista_filtrada:
-            real_i  = apuestas.index(bet)
             partido = get_partido(bet["partido_id"])
             ganada  = check_ganada(bet)
 
             if ganada is None:
-                estado_icon = "🕐"
-                estado_txt  = "En juego"
+                estado_icon, estado_txt = "🕐", "En juego"
             elif ganada:
-                estado_icon = "🏆"
-                estado_txt  = "¡Acertada!"
+                estado_icon, estado_txt = "🏆", "¡Acertada!"
             else:
-                estado_icon = "❌"
-                estado_txt  = "Fallada"
+                estado_icon, estado_txt = "❌", "Fallada"
 
-            partido_str = f"{partido['home']} vs {partido['away']}" if partido else "?"
-            comp_str    = bet.get("competicion", "")
-
-            # Resultado real si está finalizado
+            partido_str    = f"{partido['home']} vs {partido['away']}" if partido else "?"
+            comp_str       = bet.get("competicion", "")
             real_score_txt = ""
             if partido and partido["estado"] == "final" and partido.get("score"):
                 rh, ra = partido["score"]
                 real_score_txt = f"  ·  Real: {rh}-{ra}"
 
-            # Color del contenedor
             color_border = "#22c55e" if bet["pagado"] else "#ef4444"
             color_bg     = "rgba(34,197,94,0.08)" if bet["pagado"] else "rgba(239,68,68,0.08)"
             badge_txt    = "✅ PAGADO" if bet["pagado"] else "⏳ PENDIENTE"
@@ -262,7 +263,7 @@ with tab_apuestas:
                         </span>
                         <span style="color:#9ca3af;font-size:0.85em">{real_score_txt}</span>
                         <br>
-                        <span style="font-size:0.95em">{estado_icon} {estado_txt}</span>
+                        <span>{estado_icon} {estado_txt}</span>
                     </div>
                     <span style="font-size:1.3em;font-weight:900;color:#fbbf24">{bet['cantidad']:.2f}€</span>
                 </div>
@@ -275,14 +276,14 @@ with tab_apuestas:
                 nuevo = st.checkbox(
                     "Marcar como pagado" if not bet["pagado"] else "Marcar como pendiente",
                     value=bet["pagado"],
-                    key=f"chk_{real_i}"
+                    key=f"chk_{bet['id']}"
                 )
                 if nuevo != bet["pagado"]:
-                    st.session_state.apuestas[real_i]["pagado"] = nuevo
+                    actualizar_pagado(bet["id"], nuevo)
                     st.rerun()
             with col_del:
-                if st.button("🗑️", key=f"del_{real_i}"):
-                    st.session_state.apuestas.pop(real_i)
+                if st.button("🗑️", key=f"del_{bet['id']}"):
+                    eliminar_apuesta(bet["id"])
                     st.rerun()
 
         st.divider()
