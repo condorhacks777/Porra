@@ -69,7 +69,6 @@ def unirse_grupo(codigo, user_id):
     if not r.ok or not r.json():
         return None, "Código no válido"
     grupo = r.json()[0]
-    # Comprobar si ya es miembro
     r_check = requests.get(
         f"{SUPABASE_URL}/rest/v1/miembros?grupo_id=eq.{grupo['id']}&user_id=eq.{user_id}&select=id",
         headers=HEADERS, timeout=10
@@ -87,7 +86,6 @@ def unirse_grupo(codigo, user_id):
     return None, "Error al unirse"
 
 def get_mis_grupos(user_id):
-    # Obtener solo los grupo_id donde el usuario es miembro
     r = requests.get(
         f"{SUPABASE_URL}/rest/v1/miembros?user_id=eq.{user_id}&select=grupo_id",
         headers=HEADERS, timeout=10
@@ -97,13 +95,24 @@ def get_mis_grupos(user_id):
     grupo_ids = [d["grupo_id"] for d in r.json()]
     if not grupo_ids:
         return []
-    # Obtener solo esos grupos
     ids_str = ",".join(f'"{g}"' for g in grupo_ids)
     r2 = requests.get(
         f"{SUPABASE_URL}/rest/v1/grupos?id=in.({ids_str})&select=*",
         headers=HEADERS, timeout=10
     )
     return r2.json() if r2.ok else []
+
+def borrar_grupo(grupo_id):
+    # Borrar apuestas, miembros y grupo
+    requests.delete(f"{SUPABASE_URL}/rest/v1/apuestas?grupo_id=eq.{grupo_id}", headers=HEADERS, timeout=10)
+    requests.delete(f"{SUPABASE_URL}/rest/v1/miembros?grupo_id=eq.{grupo_id}", headers=HEADERS, timeout=10)
+    requests.delete(f"{SUPABASE_URL}/rest/v1/grupos?id=eq.{grupo_id}", headers=HEADERS, timeout=10)
+
+def salir_grupo(grupo_id, user_id):
+    requests.delete(
+        f"{SUPABASE_URL}/rest/v1/miembros?grupo_id=eq.{grupo_id}&user_id=eq.{user_id}",
+        headers=HEADERS, timeout=10
+    )
 
 # ── Apuestas ──────────────────────────────────────────────────────────────────
 def cargar_apuestas(grupo_id):
@@ -114,7 +123,13 @@ def cargar_apuestas(grupo_id):
     return r.json() if r.ok else []
 
 def guardar_apuesta(apuesta):
-    requests.post(f"{SUPABASE_URL}/rest/v1/apuestas", headers=HEADERS, json=apuesta, timeout=10)
+    r = requests.post(
+        f"{SUPABASE_URL}/rest/v1/apuestas",
+        headers=HEADERS,
+        json=apuesta,
+        timeout=10
+    )
+    return r.ok
 
 def actualizar_pagado(apuesta_id, pagado):
     requests.patch(
@@ -128,7 +143,7 @@ def eliminar_apuesta(apuesta_id):
         headers=HEADERS, timeout=10
     )
 
-# ── Datos partidos ────────────────────────────────────────────────────────────
+# ── Partidos ──────────────────────────────────────────────────────────────────
 PARTIDOS = {
     "🏆 Champions League": [
         {"id": "c1",  "home": "Real Madrid",      "away": "Bayern Munich",    "fecha": "Mar 7 Abr · FIN",      "estado": "final",      "score": (1, 2), "home_pct": None, "draw_pct": None, "away_pct": None},
@@ -180,13 +195,12 @@ def check_ganada(bet):
 # ── Estilos ───────────────────────────────────────────────────────────────────
 st.markdown("<style>.stApp { background-color: #0f0f1a; }</style>", unsafe_allow_html=True)
 
-# ── Session state ─────────────────────────────────────────────────────────────
-for key in ["user", "grupo"]:
+for key in ["user", "grupo", "confirmar_borrar"]:
     if key not in st.session_state:
         st.session_state[key] = None
 
 # ════════════════════════════════════════════════════════════════════════════
-# PANTALLA LOGIN / REGISTRO
+# LOGIN / REGISTRO
 # ════════════════════════════════════════════════════════════════════════════
 if not st.session_state.user:
     st.title("⚽ Porra Fútbol")
@@ -239,8 +253,6 @@ if not st.session_state.grupo:
         st.rerun()
 
     st.divider()
-
-    # Solo grupos donde el usuario es miembro
     mis_grupos = get_mis_grupos(user["id"])
 
     tab_mis, tab_crear, tab_unir = st.tabs(["📋 Mis grupos", "➕ Crear grupo", "🔗 Unirse con código"])
@@ -249,11 +261,34 @@ if not st.session_state.grupo:
         if not mis_grupos:
             st.info("Aún no perteneces a ningún grupo. Crea uno o pide el código a alguien.")
         for g in mis_grupos:
-            col1, col2 = st.columns([3, 1])
-            col1.markdown(f"**{g['nombre']}**")
+            es_creador = g.get("creador_id") == user["id"]
+            col1, col2, col3 = st.columns([3, 1, 1])
+            col1.markdown(f"**{g['nombre']}**" + (" 👑" if es_creador else ""))
             if col2.button("Entrar", key=f"entrar_{g['id']}"):
                 st.session_state.grupo = g
+                st.session_state.confirmar_borrar = None
                 st.rerun()
+            if es_creador:
+                if col3.button("🗑️", key=f"del_g_{g['id']}", help="Borrar grupo"):
+                    st.session_state.confirmar_borrar = g["id"]
+            else:
+                if col3.button("🚪", key=f"salir_{g['id']}", help="Salir del grupo"):
+                    salir_grupo(g["id"], user["id"])
+                    st.success("Has salido del grupo")
+                    st.rerun()
+
+            # Confirmación borrar
+            if st.session_state.confirmar_borrar == g["id"]:
+                st.warning(f"⚠️ ¿Borrar el grupo **{g['nombre']}** y todas sus apuestas?")
+                c1, c2 = st.columns(2)
+                if c1.button("✅ Sí, borrar", key=f"confirm_{g['id']}", type="primary"):
+                    borrar_grupo(g["id"])
+                    st.session_state.confirmar_borrar = None
+                    st.success("Grupo borrado")
+                    st.rerun()
+                if c2.button("❌ Cancelar", key=f"cancel_{g['id']}"):
+                    st.session_state.confirmar_borrar = None
+                    st.rerun()
 
     with tab_crear:
         nombre_grupo = st.text_input("Nombre del grupo (ej: Peñas del Bar)")
@@ -269,7 +304,7 @@ if not st.session_state.grupo:
                     st.error(f"❌ {err}")
 
     with tab_unir:
-        st.markdown("Pide el código al administrador del grupo e introdúcelo aquí:")
+        st.markdown("Pide el código al administrador del grupo:")
         codigo = st.text_input("Código del grupo")
         if st.button("Unirse", use_container_width=True, type="primary"):
             if not codigo.strip():
@@ -277,6 +312,9 @@ if not st.session_state.grupo:
             else:
                 grupo, err = unirse_grupo(codigo.strip(), user["id"])
                 if grupo:
+                    st.session_state.grupo = grupo
+                    st.rerun()
+                elif err == "ya_miembro":
                     st.session_state.grupo = grupo
                     st.rerun()
                 else:
@@ -288,17 +326,17 @@ if not st.session_state.grupo:
 # ════════════════════════════════════════════════════════════════════════════
 grupo    = st.session_state.grupo
 apuestas = cargar_apuestas(grupo["id"])
+es_creador = grupo.get("creador_id") == user["id"]
 
 col_t, col_out = st.columns([4, 1])
 col_t.title("⚽ Porra Fútbol")
-col_t.caption(f"Grupo: **{grupo['nombre']}** · {user['nombre']}")
-if col_out.button("Salir"):
+col_t.caption(f"Grupo: **{grupo['nombre']}** · {user['nombre']}" + (" 👑" if es_creador else ""))
+if col_out.button("← Grupos"):
     st.session_state.grupo = None
     st.rerun()
 
-# Código del grupo visible solo para miembros
-with st.expander("🔑 Código de invitación del grupo"):
-    st.markdown(f"Comparte este código con tus amigos para que se unan:")
+with st.expander("🔑 Código de invitación"):
+    st.markdown("Comparte este código con tus amigos:")
     st.code(grupo["codigo"], language=None)
 
 total     = sum(b["cantidad"] for b in apuestas)
@@ -355,7 +393,7 @@ with tab_partidos:
         if not jugador.strip():
             st.error("⚠️ Escribe el nombre")
         else:
-            guardar_apuesta({
+            ok = guardar_apuesta({
                 "jugador":     jugador.strip(),
                 "partido_id":  partido_obj["id"],
                 "competicion": competicion,
@@ -364,10 +402,13 @@ with tab_partidos:
                 "cantidad":    float(cantidad),
                 "pagado":      False,
                 "grupo_id":    grupo["id"],
-                "user_id":     str(user["id"]),
+                "user_id":     int(user["id"]),
             })
-            st.success(f"✅ **{jugador}** apuesta **{goles_home}-{goles_away}** → {cantidad:.2f}€")
-            st.rerun()
+            if ok:
+                st.success(f"✅ **{jugador}** apuesta **{goles_home}-{goles_away}** → {cantidad:.2f}€")
+                st.rerun()
+            else:
+                st.error("❌ Error al guardar la apuesta")
 
     st.divider()
 
