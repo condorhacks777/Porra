@@ -1,31 +1,120 @@
 import streamlit as st
 import requests
 import hashlib
+from datetime import datetime, timedelta, timezone
 
 SUPABASE_URL = st.secrets["supabase"]["url"]
 SUPABASE_KEY = st.secrets["supabase"]["key"]
+RAPIDAPI_KEY = st.secrets["rapidapi"]["key"]
 
-HEADERS = {
+HEADERS_SB = {
     "apikey": SUPABASE_KEY,
     "Authorization": f"Bearer {SUPABASE_KEY}",
     "Content-Type": "application/json",
     "Prefer": "return=representation"
 }
 
+HEADERS_API = {
+    "x-rapidapi-host": "api-football-v1.p.rapidapi.com",
+    "x-rapidapi-key": RAPIDAPI_KEY
+}
+
+# ── API Football ──────────────────────────────────────────────────────────────
+# Liga IDs: LaLiga=140, Champions=2
+LIGAS = {
+    "🇪🇸 LaLiga": {"id": 140, "season": 2025},
+    "🏆 Champions League": {"id": 2, "season": 2025},
+}
+
+def fetch_partidos_api():
+    """Carga partidos de los próximos 7 días y últimos 3 días de LaLiga y Champions."""
+    partidos = {}
+    hoy = datetime.now(timezone.utc)
+    desde = (hoy - timedelta(days=3)).strftime("%Y-%m-%d")
+    hasta = (hoy + timedelta(days=7)).strftime("%Y-%m-%d")
+
+    for comp, info in LIGAS.items():
+        try:
+            r = requests.get(
+                "https://api-football-v1.p.rapidapi.com/v3/fixtures",
+                headers=HEADERS_API,
+                params={
+                    "league": info["id"],
+                    "season": info["season"],
+                    "from": desde,
+                    "to": hasta,
+                    "timezone": "Europe/Madrid"
+                },
+                timeout=15
+            )
+            data = r.json()
+            lista = []
+            for f in data.get("response", []):
+                fixture  = f["fixture"]
+                teams    = f["teams"]
+                goals    = f["goals"]
+                status   = fixture["status"]["short"]
+                date_str = fixture["date"]  # ISO string
+
+                # Parsear fecha
+                try:
+                    dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+                    dt_madrid = dt + timedelta(hours=2)  # CEST
+                    fecha_fmt = dt_madrid.strftime("%a %d %b · %H:%M")
+                except:
+                    fecha_fmt = date_str[:10]
+
+                if status in ["FT", "AET", "PEN"]:
+                    estado = "final"
+                    score  = (goals["home"] or 0, goals["away"] or 0)
+                    home_pct = draw_pct = away_pct = None
+                elif status in ["1H", "HT", "2H", "ET", "BT", "P", "SUSP", "INT", "LIVE"]:
+                    estado = "en_vivo"
+                    score  = (goals["home"] or 0, goals["away"] or 0)
+                    home_pct = draw_pct = away_pct = None
+                else:
+                    estado = "programado"
+                    score  = None
+                    home_pct = draw_pct = away_pct = None
+
+                lista.append({
+                    "id":       f"f{fixture['id']}",
+                    "home":     teams["home"]["name"],
+                    "away":     teams["away"]["name"],
+                    "fecha":    fecha_fmt,
+                    "estado":   estado,
+                    "score":    score,
+                    "home_pct": home_pct,
+                    "draw_pct": draw_pct,
+                    "away_pct": away_pct,
+                    "ts":       fixture["date"],
+                })
+            # Ordenar por fecha
+            lista.sort(key=lambda x: x["ts"])
+            partidos[comp] = lista
+        except Exception as e:
+            partidos[comp] = []
+
+    return partidos
+
+@st.cache_data(ttl=86400)  # Cache 24 horas
+def get_partidos():
+    return fetch_partidos_api()
+
+# ── Auth helpers ──────────────────────────────────────────────────────────────
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
-# ── Auth ──────────────────────────────────────────────────────────────────────
 def registrar(nombre, password):
     r = requests.get(
         f"{SUPABASE_URL}/rest/v1/usuarios?nombre=eq.{nombre}&select=id",
-        headers=HEADERS, timeout=10
+        headers=HEADERS_SB, timeout=10
     )
     if r.ok and r.json():
         return None, "Ya existe un usuario con ese nombre"
     r2 = requests.post(
         f"{SUPABASE_URL}/rest/v1/usuarios",
-        headers=HEADERS,
+        headers=HEADERS_SB,
         json={"nombre": nombre, "password": hash_password(password)},
         timeout=10
     )
@@ -36,7 +125,7 @@ def registrar(nombre, password):
 def login(nombre, password):
     r = requests.get(
         f"{SUPABASE_URL}/rest/v1/usuarios?nombre=eq.{nombre}&password=eq.{hash_password(password)}&select=*",
-        headers=HEADERS, timeout=10
+        headers=HEADERS_SB, timeout=10
     )
     if r.ok and r.json():
         return r.json()[0], None
@@ -46,7 +135,7 @@ def login(nombre, password):
 def crear_grupo(nombre_grupo, user_id):
     r = requests.post(
         f"{SUPABASE_URL}/rest/v1/grupos",
-        headers=HEADERS,
+        headers=HEADERS_SB,
         json={"nombre": nombre_grupo, "creador_id": user_id},
         timeout=10
     )
@@ -54,7 +143,7 @@ def crear_grupo(nombre_grupo, user_id):
         grupo = r.json()[0]
         requests.post(
             f"{SUPABASE_URL}/rest/v1/miembros",
-            headers=HEADERS,
+            headers=HEADERS_SB,
             json={"grupo_id": grupo["id"], "user_id": user_id},
             timeout=10
         )
@@ -64,20 +153,20 @@ def crear_grupo(nombre_grupo, user_id):
 def unirse_grupo(codigo, user_id):
     r = requests.get(
         f"{SUPABASE_URL}/rest/v1/grupos?codigo=eq.{codigo}&select=*",
-        headers=HEADERS, timeout=10
+        headers=HEADERS_SB, timeout=10
     )
     if not r.ok or not r.json():
         return None, "Código no válido"
     grupo = r.json()[0]
     r_check = requests.get(
         f"{SUPABASE_URL}/rest/v1/miembros?grupo_id=eq.{grupo['id']}&user_id=eq.{user_id}&select=id",
-        headers=HEADERS, timeout=10
+        headers=HEADERS_SB, timeout=10
     )
     if r_check.ok and r_check.json():
         return grupo, "ya_miembro"
     r2 = requests.post(
         f"{SUPABASE_URL}/rest/v1/miembros",
-        headers=HEADERS,
+        headers=HEADERS_SB,
         json={"grupo_id": grupo["id"], "user_id": user_id},
         timeout=10
     )
@@ -88,7 +177,7 @@ def unirse_grupo(codigo, user_id):
 def get_mis_grupos(user_id):
     r = requests.get(
         f"{SUPABASE_URL}/rest/v1/miembros?user_id=eq.{user_id}&select=grupo_id",
-        headers=HEADERS, timeout=10
+        headers=HEADERS_SB, timeout=10
     )
     if not r.ok or not r.json():
         return []
@@ -98,96 +187,58 @@ def get_mis_grupos(user_id):
     ids_str = ",".join(f'"{g}"' for g in grupo_ids)
     r2 = requests.get(
         f"{SUPABASE_URL}/rest/v1/grupos?id=in.({ids_str})&select=*",
-        headers=HEADERS, timeout=10
+        headers=HEADERS_SB, timeout=10
     )
     return r2.json() if r2.ok else []
 
 def borrar_grupo(grupo_id):
-    # Borrar apuestas, miembros y grupo
-    requests.delete(f"{SUPABASE_URL}/rest/v1/apuestas?grupo_id=eq.{grupo_id}", headers=HEADERS, timeout=10)
-    requests.delete(f"{SUPABASE_URL}/rest/v1/miembros?grupo_id=eq.{grupo_id}", headers=HEADERS, timeout=10)
-    requests.delete(f"{SUPABASE_URL}/rest/v1/grupos?id=eq.{grupo_id}", headers=HEADERS, timeout=10)
+    requests.delete(f"{SUPABASE_URL}/rest/v1/apuestas?grupo_id=eq.{grupo_id}", headers=HEADERS_SB, timeout=10)
+    requests.delete(f"{SUPABASE_URL}/rest/v1/miembros?grupo_id=eq.{grupo_id}", headers=HEADERS_SB, timeout=10)
+    requests.delete(f"{SUPABASE_URL}/rest/v1/grupos?id=eq.{grupo_id}", headers=HEADERS_SB, timeout=10)
 
 def salir_grupo(grupo_id, user_id):
     requests.delete(
         f"{SUPABASE_URL}/rest/v1/miembros?grupo_id=eq.{grupo_id}&user_id=eq.{user_id}",
-        headers=HEADERS, timeout=10
+        headers=HEADERS_SB, timeout=10
     )
 
 # ── Apuestas ──────────────────────────────────────────────────────────────────
 def cargar_apuestas(grupo_id):
     r = requests.get(
         f"{SUPABASE_URL}/rest/v1/apuestas?grupo_id=eq.{grupo_id}&order=id.asc",
-        headers=HEADERS, timeout=10
+        headers=HEADERS_SB, timeout=10
     )
     return r.json() if r.ok else []
 
 def guardar_apuesta(apuesta):
     r = requests.post(
         f"{SUPABASE_URL}/rest/v1/apuestas",
-        headers=HEADERS,
-        json=apuesta,
-        timeout=10
+        headers=HEADERS_SB, json=apuesta, timeout=10
     )
     return r.ok
 
 def actualizar_pagado(apuesta_id, pagado):
     requests.patch(
         f"{SUPABASE_URL}/rest/v1/apuestas?id=eq.{apuesta_id}",
-        headers=HEADERS, json={"pagado": pagado}, timeout=10
+        headers=HEADERS_SB, json={"pagado": pagado}, timeout=10
     )
 
 def eliminar_apuesta(apuesta_id):
     requests.delete(
         f"{SUPABASE_URL}/rest/v1/apuestas?id=eq.{apuesta_id}",
-        headers=HEADERS, timeout=10
+        headers=HEADERS_SB, timeout=10
     )
 
-# ── Partidos ──────────────────────────────────────────────────────────────────
-PARTIDOS = {
-    "🏆 Champions League": [
-        {"id": "c1",  "home": "Real Madrid",      "away": "Bayern Munich",    "fecha": "Mar 7 Abr · FIN",      "estado": "final",      "score": (1, 2), "home_pct": None, "draw_pct": None, "away_pct": None},
-        {"id": "c2",  "home": "Sporting CP",       "away": "Arsenal FC",       "fecha": "Mar 7 Abr · FIN",      "estado": "final",      "score": (0, 1), "home_pct": None, "draw_pct": None, "away_pct": None},
-        {"id": "c3",  "home": "FC Barcelona",      "away": "Newcastle United", "fecha": "Mié 18 Mar · FIN",     "estado": "final",      "score": (7, 2), "home_pct": None, "draw_pct": None, "away_pct": None},
-        {"id": "c4",  "home": "Tottenham",         "away": "Atlético Madrid",  "fecha": "Mié 18 Mar · FIN",     "estado": "final",      "score": (3, 2), "home_pct": None, "draw_pct": None, "away_pct": None},
-        {"id": "c5",  "home": "Bayern Munich",     "away": "Atalanta BC",      "fecha": "Mié 18 Mar · FIN",     "estado": "final",      "score": (4, 1), "home_pct": None, "draw_pct": None, "away_pct": None},
-        {"id": "c6",  "home": "Manchester City",   "away": "Real Madrid",      "fecha": "Mar 17 Mar · FIN",     "estado": "final",      "score": (1, 2), "home_pct": None, "draw_pct": None, "away_pct": None},
-        {"id": "c7",  "home": "Chelsea FC",        "away": "PSG",              "fecha": "Mar 17 Mar · FIN",     "estado": "final",      "score": (0, 3), "home_pct": None, "draw_pct": None, "away_pct": None},
-        {"id": "c8",  "home": "PSG",               "away": "Liverpool FC",     "fecha": "Mié 8 Abr · 21:00",   "estado": "programado", "score": None,   "home_pct": 54.2, "draw_pct": 23.1, "away_pct": 22.7},
-        {"id": "c9",  "home": "FC Barcelona",      "away": "Atlético Madrid",  "fecha": "Mié 8 Abr · 21:00",   "estado": "programado", "score": None,   "home_pct": 63.6, "draw_pct": 18.7, "away_pct": 17.7},
-        {"id": "c10", "home": "Liverpool FC",      "away": "PSG",              "fecha": "Mar 14 Abr · 21:00",  "estado": "programado", "score": None,   "home_pct": 24.5, "draw_pct": 23.0, "away_pct": 52.5},
-        {"id": "c11", "home": "Atlético Madrid",   "away": "FC Barcelona",     "fecha": "Mar 14 Abr · 21:00",  "estado": "programado", "score": None,   "home_pct": 19.2, "draw_pct": 19.6, "away_pct": 61.2},
-        {"id": "c12", "home": "Bayern Munich",     "away": "Real Madrid",      "fecha": "Mié 15 Abr · 21:00",  "estado": "programado", "score": None,   "home_pct": 60.8, "draw_pct": 19.2, "away_pct": 20.0},
-        {"id": "c13", "home": "Arsenal FC",        "away": "Sporting CP",      "fecha": "Mié 15 Abr · 21:00",  "estado": "programado", "score": None,   "home_pct": 68.4, "draw_pct": 19.1, "away_pct": 12.5},
-    ],
-    "🇪🇸 LaLiga": [
-        {"id": "l1",  "home": "Atlético Madrid",   "away": "FC Barcelona",     "fecha": "Sáb 4 Abr · FIN",     "estado": "final",      "score": (1, 2), "home_pct": None, "draw_pct": None, "away_pct": None},
-        {"id": "l2",  "home": "Mallorca",           "away": "Real Madrid",      "fecha": "Sáb 4 Abr · FIN",     "estado": "final",      "score": (2, 1), "home_pct": None, "draw_pct": None, "away_pct": None},
-        {"id": "l3",  "home": "Real Betis",         "away": "Espanyol",         "fecha": "Sáb 4 Abr · FIN",     "estado": "final",      "score": (0, 0), "home_pct": None, "draw_pct": None, "away_pct": None},
-        {"id": "l4",  "home": "Getafe CF",          "away": "Athletic Bilbao",  "fecha": "Dom 5 Abr · FIN",     "estado": "final",      "score": (2, 0), "home_pct": None, "draw_pct": None, "away_pct": None},
-        {"id": "l5",  "home": "Valencia CF",        "away": "Celta de Vigo",    "fecha": "Dom 5 Abr · FIN",     "estado": "final",      "score": (2, 3), "home_pct": None, "draw_pct": None, "away_pct": None},
-        {"id": "l6",  "home": "Girona FC",          "away": "Villarreal CF",    "fecha": "Lun 6 Abr · FIN",     "estado": "final",      "score": (1, 0), "home_pct": None, "draw_pct": None, "away_pct": None},
-        {"id": "l7",  "home": "Real Madrid",        "away": "Girona FC",        "fecha": "Vie 10 Abr · 21:00",  "estado": "programado", "score": None,   "home_pct": 75.0, "draw_pct": 14.6, "away_pct": 10.4},
-        {"id": "l8",  "home": "Real Sociedad",      "away": "Dep. Alavés",      "fecha": "Sáb 11 Abr · 14:00",  "estado": "programado", "score": None,   "home_pct": 55.1, "draw_pct": 25.2, "away_pct": 19.7},
-        {"id": "l9",  "home": "Elche CF",           "away": "Valencia CF",      "fecha": "Sáb 11 Abr · 16:15",  "estado": "programado", "score": None,   "home_pct": 38.9, "draw_pct": 28.7, "away_pct": 32.4},
-        {"id": "l10", "home": "FC Barcelona",       "away": "Espanyol",         "fecha": "Sáb 11 Abr · 18:30",  "estado": "programado", "score": None,   "home_pct": 77.0, "draw_pct": 13.3, "away_pct":  9.7},
-        {"id": "l11", "home": "Sevilla FC",         "away": "Atlético Madrid",  "fecha": "Sáb 11 Abr · 21:00",  "estado": "programado", "score": None,   "home_pct": 27.8, "draw_pct": 30.2, "away_pct": 42.0},
-        {"id": "l12", "home": "Osasuna",            "away": "Real Betis",       "fecha": "Dom 12 Abr · 14:00",  "estado": "programado", "score": None,   "home_pct": 42.3, "draw_pct": 27.6, "away_pct": 30.1},
-        {"id": "l13", "home": "Mallorca",           "away": "Rayo Vallecano",   "fecha": "Dom 12 Abr · 16:15",  "estado": "programado", "score": None,   "home_pct": 38.8, "draw_pct": 29.4, "away_pct": 31.8},
-        {"id": "l14", "home": "Celta de Vigo",      "away": "Real Oviedo",      "fecha": "Dom 12 Abr · 18:30",  "estado": "programado", "score": None,   "home_pct": 57.8, "draw_pct": 24.0, "away_pct": 18.2},
-        {"id": "l15", "home": "Athletic Bilbao",    "away": "Villarreal CF",    "fecha": "Dom 12 Abr · 21:00",  "estado": "programado", "score": None,   "home_pct": 42.0, "draw_pct": 27.2, "away_pct": 30.8},
-        {"id": "l16", "home": "Levante UD",         "away": "Getafe CF",        "fecha": "Lun 13 Abr · 21:00",  "estado": "programado", "score": None,   "home_pct": 34.4, "draw_pct": 31.7, "away_pct": 33.9},
-    ],
-}
+def get_partido_por_id(pid, partidos):
+    for lista in partidos.values():
+        for p in lista:
+            if p["id"] == pid:
+                return p
+    return None
 
-TODOS_PARTIDOS = [p for lista in PARTIDOS.values() for p in lista]
-
-def get_partido(pid):
-    return next((p for p in TODOS_PARTIDOS if p["id"] == pid), None)
-
-def check_ganada(bet):
-    partido = get_partido(bet["partido_id"])
-    if not partido or partido["estado"] != "final" or not partido.get("score"):
+def check_ganada(bet, partidos):
+    partido = get_partido_por_id(bet["partido_id"], partidos)
+    if not partido or partido["estado"] not in ["final"] or not partido.get("score"):
         return None
     h, a = partido["score"]
     return bet["goles_home"] == h and bet["goles_away"] == a
@@ -274,17 +325,14 @@ if not st.session_state.grupo:
             else:
                 if col3.button("🚪", key=f"salir_{g['id']}", help="Salir del grupo"):
                     salir_grupo(g["id"], user["id"])
-                    st.success("Has salido del grupo")
                     st.rerun()
 
-            # Confirmación borrar
             if st.session_state.confirmar_borrar == g["id"]:
-                st.warning(f"⚠️ ¿Borrar el grupo **{g['nombre']}** y todas sus apuestas?")
+                st.warning(f"⚠️ ¿Borrar **{g['nombre']}** y todas sus apuestas?")
                 c1, c2 = st.columns(2)
                 if c1.button("✅ Sí, borrar", key=f"confirm_{g['id']}", type="primary"):
                     borrar_grupo(g["id"])
                     st.session_state.confirmar_borrar = None
-                    st.success("Grupo borrado")
                     st.rerun()
                 if c2.button("❌ Cancelar", key=f"cancel_{g['id']}"):
                     st.session_state.confirmar_borrar = None
@@ -322,10 +370,16 @@ if not st.session_state.grupo:
     st.stop()
 
 # ════════════════════════════════════════════════════════════════════════════
+# CARGAR PARTIDOS (cache 24h)
+# ════════════════════════════════════════════════════════════════════════════
+with st.spinner("Cargando partidos..."):
+    PARTIDOS = get_partidos()
+
+# ════════════════════════════════════════════════════════════════════════════
 # APP PRINCIPAL
 # ════════════════════════════════════════════════════════════════════════════
-grupo    = st.session_state.grupo
-apuestas = cargar_apuestas(grupo["id"])
+grupo      = st.session_state.grupo
+apuestas   = cargar_apuestas(grupo["id"])
 es_creador = grupo.get("creador_id") == user["id"]
 
 col_t, col_out = st.columns([4, 1])
@@ -362,73 +416,86 @@ with tab_partidos:
     cantidad    = st.number_input("💶 Cantidad (€)", min_value=0.5, value=10.0, step=0.5, key="cantidad")
     competicion = st.selectbox("🏆 Competición", list(PARTIDOS.keys()), key="competicion")
 
-    partidos_comp = PARTIDOS[competicion]
-    opciones = []
-    for p in partidos_comp:
-        icono = "✅" if p["estado"] == "final" else ("🔴 HOY" if "Hoy" in p["fecha"] else "🕐")
-        score_str = f" ({p['score'][0]}-{p['score'][1]})" if p.get("score") else ""
-        opciones.append(f"{icono}  {p['home']} vs {p['away']}{score_str}  ·  {p['fecha']}")
+    partidos_comp = PARTIDOS.get(competicion, [])
 
-    partido_sel = st.selectbox("⚽ Partido", opciones, key="partido_sel")
-    partido_obj = partidos_comp[opciones.index(partido_sel)]
-
-    st.markdown(f"**🎯 Marcador para: {partido_obj['home']} vs {partido_obj['away']}**")
-    col_gh, col_sep, col_ga = st.columns([5, 1, 5])
-    with col_gh:
-        st.caption(partido_obj["home"])
-        goles_home = st.number_input("gh", min_value=0, max_value=20, value=1, step=1,
-                                     key="goles_home", label_visibility="collapsed")
-    with col_sep:
-        st.markdown("<div style='text-align:center;font-size:2em;font-weight:900;padding-top:16px'>-</div>",
-                    unsafe_allow_html=True)
-    with col_ga:
-        st.caption(partido_obj["away"])
-        goles_away = st.number_input("ga", min_value=0, max_value=20, value=0, step=1,
-                                     key="goles_away", label_visibility="collapsed")
-
-    st.markdown(f"<div style='text-align:center;font-size:2em;font-weight:900;color:#fbbf24;margin:8px 0'>"
-                f"{goles_home} - {goles_away}</div>", unsafe_allow_html=True)
-
-    if st.button("💾 Registrar apuesta", use_container_width=True, type="primary"):
-        if not jugador.strip():
-            st.error("⚠️ Escribe el nombre")
-        else:
-            ok = guardar_apuesta({
-                "jugador":     jugador.strip(),
-                "partido_id":  partido_obj["id"],
-                "competicion": competicion,
-                "goles_home":  int(goles_home),
-                "goles_away":  int(goles_away),
-                "cantidad":    float(cantidad),
-                "pagado":      False,
-                "grupo_id":    grupo["id"],
-                "user_id":     int(user["id"]),
-            })
-            if ok:
-                st.success(f"✅ **{jugador}** apuesta **{goles_home}-{goles_away}** → {cantidad:.2f}€")
-                st.rerun()
+    if not partidos_comp:
+        st.warning("No hay partidos disponibles para esta competición.")
+    else:
+        opciones = []
+        for p in partidos_comp:
+            if p["estado"] == "final":
+                icono = "✅"
+            elif p["estado"] == "en_vivo":
+                icono = "🔴 EN VIVO"
             else:
-                st.error("❌ Error al guardar la apuesta")
+                icono = "🕐"
+            score_str = f" ({p['score'][0]}-{p['score'][1]})" if p.get("score") else ""
+            opciones.append(f"{icono}  {p['home']} vs {p['away']}{score_str}  ·  {p['fecha']}")
+
+        partido_sel = st.selectbox("⚽ Partido", opciones, key="partido_sel")
+        partido_obj = partidos_comp[opciones.index(partido_sel)]
+
+        st.markdown(f"**🎯 Marcador para: {partido_obj['home']} vs {partido_obj['away']}**")
+        col_gh, col_sep, col_ga = st.columns([5, 1, 5])
+        with col_gh:
+            st.caption(partido_obj["home"])
+            goles_home = st.number_input("gh", min_value=0, max_value=20, value=1, step=1,
+                                         key="goles_home", label_visibility="collapsed")
+        with col_sep:
+            st.markdown("<div style='text-align:center;font-size:2em;font-weight:900;padding-top:16px'>-</div>",
+                        unsafe_allow_html=True)
+        with col_ga:
+            st.caption(partido_obj["away"])
+            goles_away = st.number_input("ga", min_value=0, max_value=20, value=0, step=1,
+                                         key="goles_away", label_visibility="collapsed")
+
+        st.markdown(f"<div style='text-align:center;font-size:2em;font-weight:900;color:#fbbf24;margin:8px 0'>"
+                    f"{goles_home} - {goles_away}</div>", unsafe_allow_html=True)
+
+        if st.button("💾 Registrar apuesta", use_container_width=True, type="primary"):
+            if not jugador.strip():
+                st.error("⚠️ Escribe el nombre")
+            else:
+                ok = guardar_apuesta({
+                    "jugador":     jugador.strip(),
+                    "partido_id":  partido_obj["id"],
+                    "competicion": competicion,
+                    "goles_home":  int(goles_home),
+                    "goles_away":  int(goles_away),
+                    "cantidad":    float(cantidad),
+                    "pagado":      False,
+                    "grupo_id":    grupo["id"],
+                    "user_id":     int(user["id"]),
+                })
+                if ok:
+                    st.success(f"✅ **{jugador}** apuesta **{goles_home}-{goles_away}** → {cantidad:.2f}€")
+                    st.rerun()
+                else:
+                    st.error("❌ Error al guardar la apuesta")
 
     st.divider()
 
+    # Mostrar partidos
     for comp, lista in PARTIDOS.items():
         st.subheader(comp)
-        hoy  = [p for p in lista if p["estado"] == "programado" and "Hoy" in p["fecha"]]
-        prog = [p for p in lista if p["estado"] == "programado" and "Hoy" not in p["fecha"]]
-        fin  = [p for p in lista if p["estado"] == "final"]
+        if not lista:
+            st.info("No hay partidos disponibles.")
+            continue
 
-        if hoy:
-            st.markdown("**🔴 HOY**")
-            for p in hoy:
-                st.markdown(f"""<div style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.5);
+        en_vivo  = [p for p in lista if p["estado"] == "en_vivo"]
+        prog     = [p for p in lista if p["estado"] == "programado"]
+        fin      = [p for p in lista if p["estado"] == "final"]
+
+        if en_vivo:
+            st.markdown("**🔴 EN VIVO**")
+            for p in en_vivo:
+                h, a = p["score"]
+                st.markdown(f"""<div style="background:rgba(239,68,68,0.12);border:2px solid rgba(239,68,68,0.7);
                 border-radius:10px;padding:12px;margin-bottom:8px">
-                <small style="color:#ef4444;font-weight:700">🔴 HOY · {p['fecha']}</small><br>
-                <b>{p['home']}</b> vs <b>{p['away']}</b></div>""", unsafe_allow_html=True)
-                c1, c2, c3 = st.columns(3)
-                c1.progress(p["home_pct"] / 100, text=f"Local {p['home_pct']}%")
-                c2.progress(p["draw_pct"] / 100, text=f"Empate {p['draw_pct']}%")
-                c3.progress(p["away_pct"] / 100, text=f"Visit. {p['away_pct']}%")
+                <small style="color:#ef4444;font-weight:700">🔴 EN VIVO · {p['fecha']}</small><br>
+                <b>{p['home']}</b>
+                &nbsp;<span style="font-size:1.3em;font-weight:900;color:#fff">{h} - {a}</span>&nbsp;
+                <b>{p['away']}</b></div>""", unsafe_allow_html=True)
 
         if prog:
             st.markdown("**🕐 Próximos**")
@@ -437,10 +504,6 @@ with tab_partidos:
                 border-radius:10px;padding:12px;margin-bottom:8px">
                 <small style="color:#fbbf24">{p['fecha']}</small><br>
                 <b>{p['home']}</b> vs <b>{p['away']}</b></div>""", unsafe_allow_html=True)
-                c1, c2, c3 = st.columns(3)
-                c1.progress(p["home_pct"] / 100, text=f"Local {p['home_pct']}%")
-                c2.progress(p["draw_pct"] / 100, text=f"Empate {p['draw_pct']}%")
-                c3.progress(p["away_pct"] / 100, text=f"Visit. {p['away_pct']}%")
 
         if fin:
             with st.expander(f"✅ Resultados recientes ({len(fin)})"):
@@ -471,8 +534,8 @@ with tab_apuestas_tab:
             st.info("No hay apuestas en esta categoría.")
 
         for bet in lista_filtrada:
-            partido = get_partido(bet["partido_id"])
-            ganada  = check_ganada(bet)
+            partido = get_partido_por_id(bet["partido_id"], PARTIDOS)
+            ganada  = check_ganada(bet, PARTIDOS)
 
             if ganada is None:
                 estado_icon, estado_txt = "🕐", "En juego"
