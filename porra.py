@@ -1,24 +1,29 @@
 import streamlit as st
 import requests
 
-RAPIDAPI_KEY = st.secrets["rapidapi"]["key"]
-HEADERS_API = {"x-apisports-key": RAPIDAPI_KEY}
-BASE_URL = "https://v3.football.api-sports.io"
+FD_KEY = st.secrets["footballdata"]["key"]
+HEADERS = {"X-Auth-Token": FD_KEY}
+BASE = "https://api.football-data.org/v4"
 
-st.title("🔧 Debug last/next")
+st.title("🔧 Debug football-data.org")
 
-for nombre, liga_id, season in [("LaLiga", 140, 2025), ("Champions", 2, 2025)]:
+# LaLiga = PD, Champions = CL
+for nombre, code in [("LaLiga", "PD"), ("Champions", "CL")]:
     st.subheader(nombre)
-    for param, n in [("last", 3), ("next", 5)]:
-        r = requests.get(
-            f"{BASE_URL}/fixtures",
-            headers=HEADERS_API,
-            params={"league": liga_id, "season": season, param: n},
-            timeout=15
-        )
+    r = requests.get(f"{BASE}/competitions/{code}/matches",
+                     headers=HEADERS,
+                     params={"status": "SCHEDULED,LIVE,IN_PLAY,PAUSED,FINISHED"},
+                     timeout=15)
+    st.write(f"Status: {r.status_code}")
+    if r.ok:
         data = r.json()
-        partidos = data.get("response", [])
-        errores  = data.get("errors", [])
-        st.write(f"**{param}={n}** → Status {r.status_code} · {len(partidos)} partidos · Errores: {errores}")
-        for p in partidos[:2]:
-            st.write(f"  ⚽ {p['teams']['home']['name']} vs {p['teams']['away']['name']} · {p['fixture']['date'][:10]}")
+        matches = data.get("matches", [])
+        st.write(f"Partidos: {len(matches)}")
+        for m in matches[:3]:
+            home = m["homeTeam"]["name"]
+            away = m["awayTeam"]["name"]
+            date = m["utcDate"][:10]
+            status = m["status"]
+            st.write(f"⚽ {home} vs {away} · {date} · {status}")
+    else:
+        st.error(r.text)
