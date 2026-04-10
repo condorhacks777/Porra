@@ -25,7 +25,7 @@ LIGAS = {
 @st.cache_data(ttl=86400)
 def get_partidos():
     ahora = datetime.now(timezone.utc)
-    desde = ahora - timedelta(days=5)
+    desde = ahora - timedelta(days=2)
     hasta = ahora + timedelta(days=10)
     result = {}
 
